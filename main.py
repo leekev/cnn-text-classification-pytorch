@@ -8,6 +8,7 @@ import torchtext.datasets as datasets
 import model
 import train
 import mydatasets
+from torchtext.data import TabularDataset
 
 
 parser = argparse.ArgumentParser(description='CNN text classificer')
@@ -42,41 +43,106 @@ args = parser.parse_args()
 
 # load SST dataset
 def sst(text_field, label_field,  **kargs):
-    train_data, dev_data, test_data = datasets.SST.splits(text_field, label_field, fine_grained=True)
-    text_field.build_vocab(train_data, dev_data, test_data)
-    label_field.build_vocab(train_data, dev_data, test_data)
-    train_iter, dev_iter, test_iter = data.BucketIterator.splits(
-                                        (train_data, dev_data, test_data), 
+    train_data, val_data, test_data = datasets.SST.splits(text_field, label_field, fine_grained=True)
+    text_field.build_vocab(train_data, val_data, test_data)
+    label_field.build_vocab(train_data, val_data, test_data)
+    train_iter, val_iter, test_iter = data.BucketIterator.splits(
+                                        (train_data, val_data, test_data), 
                                         batch_sizes=(args.batch_size, 
-                                                     len(dev_data), 
+                                                     len(val_data), 
                                                      len(test_data)),
                                         **kargs)
-    return train_iter, dev_iter, test_iter 
+    return train_iter, val_iter, test_iter 
 
 
 # load MR dataset
 def mr(text_field, label_field, **kargs):
-    train_data, dev_data = mydatasets.MR.splits(text_field, label_field)
-    text_field.build_vocab(train_data, dev_data)
-    label_field.build_vocab(train_data, dev_data)
-    train_iter, dev_iter = data.Iterator.splits(
-                                (train_data, dev_data), 
-                                batch_sizes=(args.batch_size, len(dev_data)),
+    train_data, val_data = mydatasets.MR.splits(text_field, label_field)
+    text_field.build_vocab(train_data, val_data)
+    label_field.build_vocab(train_data, val_data)
+
+    print("train", train_data[0])
+    print("val", val_data[0])
+
+    train_iter, val_iter = data.Iterator.splits(
+                                (train_data, val_data), 
+                                batch_sizes=(args.batch_size, len(val_data)),
                                 **kargs)
-    return train_iter, dev_iter
+
+    print(next(train_iter.__iter__()))
+
+    return train_iter, val_iter
+
+
+
+# load Clinton dataset
+def clinton(id_field, text_field, label_field, **kargs):
+    datafields = [("id", id_field),
+                  ("Tweet", text_field),
+                  ("Target", None),
+                  ("Stance", label_field),
+                  ("Opinion Towards", None),
+                  ("Sentiment", None)]
+
+
+
+    # datafields = [("id", id_field),
+    #               ("Tweet", text_field),
+    #               ("Stance", label_field)]
+
+    train_data, val_data = TabularDataset.splits(
+                   path="~/Desktop/task_six/train",
+                   train='train_hillary.u.csv', validation='val_hillary.u.csv',
+                   format='csv',
+                   skip_header=True,
+                   fields=datafields)
+
+    test_data = TabularDataset(
+           path="~/Desktop/task_six/test/test_hillary.u.csv",
+           format='csv',
+           skip_header=True,
+           fields=datafields)
+
+    print("train data", train_data[0].Tweet)
+    print("val data", train_data[0].Stance)
+
+    text_field.build_vocab(train_data, val_data)
+    label_field.build_vocab(train_data, val_data)
+    id_field.build_vocab(train_data, val_data)
+
+    # print(label_field.vocab.stoi)
+    # print(text_field.vocab.freqs.most_common(10))
+
+
+    train_iter, val_iter, test_iter = data.BucketIterator.splits(
+                                        (train_data, val_data, test_data),
+                                        batch_sizes=(args.batch_size,
+                                                     len(val_data),
+                                                     len(test_data)),
+                                                     sort_key=lambda x: x.id,
+                                        **kargs)
+
+
+    return train_iter, val_iter, test_iter
 
 
 # load data
 print("\nLoading data...")
-text_field = data.Field(lower=True)
-label_field = data.Field(sequential=False)
-train_iter, dev_iter = mr(text_field, label_field, device=-1, repeat=False)
-# train_iter, dev_iter, test_iter = sst(text_field, label_field, device=-1, repeat=False)
+# text_field = data.Field(lower=True)
+# label_field = data.Field(sequential=False)
+# train_iter, val_iter = mr(text_field, label_field, repeat=False)
+# train_iter, val_iter, test_iter = sst(text_field, label_field, repeat=False)
+id_field = data.Field(sequential=True)
+text_field = data.Field(tokenize='spacy')
+label_field = data.LabelField(sequential=False)
+train_iter, val_iter, test_iter = clinton(id_field, text_field, label_field, repeat=False)
+
+
 
 
 # update args and print
 args.embed_num = len(text_field.vocab)
-args.class_num = len(label_field.vocab) - 1
+args.class_num = len(label_field.vocab)
 args.cuda = (not args.no_cuda) and torch.cuda.is_available(); del args.no_cuda
 args.kernel_sizes = [int(k) for k in args.kernel_sizes.split(',')]
 args.save_dir = os.path.join(args.save_dir, datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S'))
@@ -105,11 +171,11 @@ elif args.test:
     try:
         train.eval(test_iter, cnn, args) 
     except Exception as e:
-        print("\nSorry. The test dataset doesn't  exist.\n")
+        print(e, "\nSorry. The test dataset doesn't  exist.\n")
 else:
     print()
     try:
-        train.train(train_iter, dev_iter, cnn, args)
+        train.train(train_iter, val_iter, cnn, args)
     except KeyboardInterrupt:
         print('\n' + '-' * 89)
         print('Exiting from training early')
