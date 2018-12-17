@@ -5,7 +5,7 @@ import torch.autograd as autograd
 import torch.nn.functional as F
 
 
-def train(train_iter, dev_iter, model, args):
+def train(train_iter, val_iter, model, args):
     if args.cuda:
         model.cuda()
 
@@ -17,16 +17,16 @@ def train(train_iter, dev_iter, model, args):
     model.train()
     for epoch in range(1, args.epochs+1):
         for batch in train_iter:
-            feature, target = batch.text, batch.label
-            feature.data.t_(), target.data.sub_(1)  # batch first, index align
+            feature, target = batch.Tweet, batch.Stance
+
+            feature.data.t_()#, target.data.sub_(1)  # batch first, index align
             if args.cuda:
                 feature, target = feature.cuda(), target.cuda()
 
             optimizer.zero_grad()
             logit = model(feature)
-
-            #print('logit vector', logit.size())
-            #print('target vector', target.size())
+            # print('logit vector', logit.size())
+            # print('target vector', target.size())
             loss = F.cross_entropy(logit, target)
             loss.backward()
             optimizer.step()
@@ -37,12 +37,12 @@ def train(train_iter, dev_iter, model, args):
                 accuracy = 100.0 * corrects/batch.batch_size
                 sys.stdout.write(
                     '\rBatch[{}] - loss: {:.6f}  acc: {:.4f}%({}/{})'.format(steps, 
-                                                                             loss.data[0], 
+                                                                             loss.item(), 
                                                                              accuracy,
                                                                              corrects,
                                                                              batch.batch_size))
             if steps % args.test_interval == 0:
-                dev_acc = eval(dev_iter, model, args)
+                dev_acc = eval(val_iter, model, args)
                 if dev_acc > best_acc:
                     best_acc = dev_acc
                     last_step = steps
@@ -58,16 +58,17 @@ def train(train_iter, dev_iter, model, args):
 def eval(data_iter, model, args):
     model.eval()
     corrects, avg_loss = 0, 0
+    print(len(data_iter))
     for batch in data_iter:
-        feature, target = batch.text, batch.label
-        feature.data.t_(), target.data.sub_(1)  # batch first, index align
+        feature, target = batch.Tweet, batch.Stance
+        feature.data.t_()#, target.data.sub_(1)  # batch first, index align
         if args.cuda:
             feature, target = feature.cuda(), target.cuda()
 
         logit = model(feature)
         loss = F.cross_entropy(logit, target, size_average=False)
 
-        avg_loss += loss.data[0]
+        avg_loss += loss.item()
         corrects += (torch.max(logit, 1)
                      [1].view(target.size()).data == target.data).sum()
 
@@ -81,21 +82,21 @@ def eval(data_iter, model, args):
     return accuracy
 
 
-def predict(text, model, text_field, label_feild, cuda_flag):
+def predict(text, model, text_field, label_field, cuda_flag):
     assert isinstance(text, str)
     model.eval()
     # text = text_field.tokenize(text)
     text = text_field.preprocess(text)
     text = [[text_field.vocab.stoi[x] for x in text]]
-    x = text_field.tensor_type(text)
-    x = autograd.Variable(x, volatile=True)
-    if cuda_flag:
-        x = x.cuda()
-    print(x)
-    output = model(x)
-    _, predicted = torch.max(output, 1)
-    #return label_feild.vocab.itos[predicted.data[0][0]+1]
-    return label_feild.vocab.itos[predicted.data[0]+1]
+    x = torch.tensor(text)
+    with torch.no_grad():
+        if cuda_flag:
+            x = x.cuda()
+        print(x)
+        output = model(x)
+        _, predicted = torch.max(output, 1)
+        #return label_field.vocab.itos[predicted.data[0][0]+1]
+        return label_field.vocab.itos[predicted.data[0]+1]
 
 
 def save(model, save_dir, save_prefix, steps):
